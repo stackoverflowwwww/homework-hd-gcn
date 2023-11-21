@@ -29,8 +29,9 @@ if __name__ == '__main__':
     g = Graph().A
     import matplotlib.pyplot as plt
     for i, g_ in enumerate(g[0]):
+        g_=g_[1]
         plt.imshow(g_, cmap='gray')
         cb = plt.colorbar()
-        plt.savefig('./graph_{}.png'.format(i))
+        plt.savefig('../figures/graph_{}.png'.format(i))
         cb.remove()
-        plt.show()
+        # plt.show()

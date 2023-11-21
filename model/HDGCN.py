@@ -195,7 +195,7 @@ class EdgeConv(nn.Module):
             N, C, T, V = x.size()
             x = x.mean(dim=-2, keepdim=False) # N, C, V
         
-        x = self.get_graph_feature(x, self.k)
+        x = self.get_graph_feature(x, self.k) #(N,C,V,K)
         x = self.conv(x)
         x = x.max(dim=-1, keepdim=False)[0]
         
@@ -234,7 +234,7 @@ class EdgeConv(nn.Module):
         feature = torch.cat((feature - x, x), dim=3)
         feature = rearrange(feature, 'n v k c -> n c v k')
         
-        return feature
+        return feature # (N,C,V,K)
     
 
 class AHA(nn.Module):
@@ -269,17 +269,17 @@ class AHA(nn.Module):
     def forward(self, x):
         N, C, L, T, V = x.size()
         
-        x_t = x.max(dim=-2, keepdim=False)[0]
+        x_t = x.max(dim=-2, keepdim=False)[0] #(N,C,L,V)
         x_t = self.conv_down(x_t)
         
         x_sampled = []
         for i in range(self.num_layers):
             s_t = x_t[:, :, i, self.layers[i]]
-            s_t = s_t.mean(dim=-1, keepdim=True)
+            s_t = s_t.mean(dim=-1, keepdim=True) #(N,C,1)
             x_sampled.append(s_t)
-        x_sampled = torch.cat(x_sampled, dim=2)
+        x_sampled = torch.cat(x_sampled, dim=2) #(N,C,L)
         
-        att = self.edge_conv(x_sampled, dim=3)
+        att = self.edge_conv(x_sampled, dim=3) #(N,C,L)
         att = self.aggregate(att).view(N, C, L, 1, 1)
         
         out = (x * self.sigmoid(att)).sum(dim=2, keepdim=False)
@@ -366,7 +366,7 @@ class HD_Gconv(nn.Module):
             
             out.append(y)
             
-        out = torch.stack(out, dim=2)
+        out = torch.stack(out, dim=2) #(N,C,L,T,V)
         if self.att:
             out = self.aha(out)
         else:

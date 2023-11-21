@@ -27,6 +27,7 @@ from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 from torchlight import DictAction
+from torch.cuda.amp import autocast
 
 
 import resource
@@ -218,6 +219,7 @@ def get_parser():
         help='decay rate for learning rate')
     parser.add_argument('--warm_up_epoch', type=int, default=0)
     parser.add_argument('--loss-type', type=str, default='CE')
+    parser.add_argument("--half", type=bool, default=True)
 
     return parser
 
@@ -255,6 +257,8 @@ class Processor():
         else:
             self.load_optimizer()
             self.load_data()
+
+        self.scaler = torch.cuda.amp.GradScaler()
         self.lr = self.arg.base_lr
         self.best_acc = 0
         self.best_acc_epoch = 0
@@ -418,12 +422,19 @@ class Processor():
             timer['dataloader'] += self.split_time()
 
             # forward
-            output = self.model(data)
-            loss = self.loss(output, label)
+            with autocast(enabled=self.arg.half):
+                output = self.model(data)
+                loss = self.loss(output, label)
             # backward
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            # loss.backward()
+            self.scaler.scale(loss).backward()
+            # self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            output=output.float()
+            loss=loss.float()
 
             loss_value.append(loss.data.item())
             timer['model'] += self.split_time()
@@ -474,8 +485,11 @@ class Processor():
                 with torch.no_grad():
                     data = data.float().cuda(self.output_device)
                     label = label.long().cuda(self.output_device)
-                    output = self.model(data)
-                    loss = self.loss(output, label)
+                    with autocast(enabled=self.arg.half):
+                        output = self.model(data)
+                        loss = self.loss(output, label)
+                    output=output.float()
+                    loss=loss.float()
                     score_frag.append(output.data.cpu().numpy())
                     loss_value.append(loss.data.item())
 
@@ -589,7 +603,7 @@ if __name__ == '__main__':
     p = parser.parse_args()
     if p.config is not None:
         with open(p.config, 'r') as f:
-            default_arg = yaml.load(f)
+            default_arg = yaml.load(f,yaml.SafeLoader)
         key = vars(p).keys()
         for k in default_arg.keys():
             if k not in key:
