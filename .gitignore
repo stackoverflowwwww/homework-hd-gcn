@@ -2,3 +2,5 @@ work_dir
 figures
 data
 torchlight
+test
+.vscode

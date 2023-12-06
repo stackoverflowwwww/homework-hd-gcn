@@ -238,8 +238,10 @@ class EdgeConv(nn.Module):
     
 
 class AHA(nn.Module):
-    def __init__(self, in_channels, num_layers, CoM):
+    def __init__(self, in_channels, num_layers, CoM,rsap=True,h_edge=True):
         super(AHA, self).__init__()
+        self.rsap=rsap
+        self.h_edge=h_edge
         
         self.num_layers = num_layers
         
@@ -258,8 +260,8 @@ class AHA(nn.Module):
             nn.BatchNorm2d(inter_channels),
             nn.ReLU(inplace=True)
         )
-        
-        self.edge_conv = EdgeConv(inter_channels, inter_channels, k=3)
+        if self.h_edge:
+            self.edge_conv = EdgeConv(inter_channels, inter_channels, k=3)
         
         self.aggregate = nn.Conv1d(inter_channels, in_channels, kernel_size=1)
         self.sigmoid = nn.Sigmoid()
@@ -274,12 +276,17 @@ class AHA(nn.Module):
         
         x_sampled = []
         for i in range(self.num_layers):
-            s_t = x_t[:, :, i, self.layers[i]]
+            if self.rsap:
+                s_t = x_t[:, :, i, self.layers[i]]
+            else:
+                s_t = x_t[:, :, i, :]
             s_t = s_t.mean(dim=-1, keepdim=True) #(N,C,1)
             x_sampled.append(s_t)
         x_sampled = torch.cat(x_sampled, dim=2) #(N,C,L)
-        
-        att = self.edge_conv(x_sampled, dim=3) #(N,C,L)
+        if self.h_edge:
+            att = self.edge_conv(x_sampled, dim=3) #(N,C,L)
+        else:
+            att=x_sampled
         att = self.aggregate(att).view(N, C, L, 1, 1)
         
         out = (x * self.sigmoid(att)).sum(dim=2, keepdim=False)
@@ -289,12 +296,14 @@ class AHA(nn.Module):
 
 
 class HD_Gconv(nn.Module):
-    def __init__(self, in_channels, out_channels, A, adaptive=True, residual=True, att=False, CoM=21):
+    def __init__(self, in_channels, out_channels, A, adaptive=True, residual=True, att=False, CoM=21,rsap=True,h_edge=True):
         super(HD_Gconv, self).__init__()
         self.num_layers = A.shape[0]
         self.num_subset = A.shape[1]
         
         self.att = att
+        self.rsap=rsap
+        self.h_edge=h_edge
         
         inter_channels = out_channels // (self.num_subset + 1)
         self.adaptive = adaptive
@@ -323,7 +332,7 @@ class HD_Gconv(nn.Module):
             self.conv.append(self.conv_d)
             
         if self.att:
-            self.aha = AHA(out_channels, num_layers=self.num_layers, CoM=CoM)
+            self.aha = AHA(out_channels, num_layers=self.num_layers, CoM=CoM,rsap=self.rsap,h_edge=self.h_edge)
             
         if residual:
             if in_channels != out_channels:
@@ -371,6 +380,7 @@ class HD_Gconv(nn.Module):
             out = self.aha(out)
         else:
             out = out.sum(dim=2, keepdim=False)
+            # print("no_att")
             
         out = self.bn(out)
         
@@ -381,9 +391,9 @@ class HD_Gconv(nn.Module):
 
 class TCN_GCN_unit(nn.Module):
     def __init__(self, in_channels, out_channels, A, stride=1, residual=True, adaptive=True,
-                 kernel_size=5, dilations=[1, 2], att=True, CoM=21):
+                 kernel_size=5, dilations=[1, 2], att=True, CoM=21,rsap=True,h_edge=True):
         super(TCN_GCN_unit, self).__init__()
-        self.gcn1 = HD_Gconv(in_channels, out_channels, A, adaptive=adaptive, att=att, CoM=CoM)
+        self.gcn1 = HD_Gconv(in_channels, out_channels, A, adaptive=adaptive, att=att, CoM=CoM,rsap=rsap,h_edge=h_edge)
         self.tcn1 = MultiScale_TemporalConv(out_channels, out_channels, kernel_size=kernel_size, stride=stride, dilations=dilations,
                                             residual=False)
         self.relu = nn.ReLU(inplace=True)
@@ -403,7 +413,7 @@ class TCN_GCN_unit(nn.Module):
 
 class Model(nn.Module):
     def __init__(self, num_class=60, num_point=25, num_person=2, graph=None, graph_args=dict(), in_channels=3,
-                 drop_out=0, adaptive=True):
+                 drop_out=0, adaptive=True,att=True,rsap=True,h_edge=True):
         super(Model, self).__init__()
 
         if graph is None:
@@ -422,15 +432,15 @@ class Model(nn.Module):
         base_channels = 64
 
         self.l1 = TCN_GCN_unit(3, base_channels, A, residual=False, adaptive=adaptive, att=False, CoM=CoM)
-        self.l2 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
-        self.l3 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
-        self.l4 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM)
-        self.l5 = TCN_GCN_unit(base_channels, base_channels*2, A, stride=2, adaptive=adaptive, CoM=CoM)
-        self.l6 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM)
-        self.l7 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM)
-        self.l8 = TCN_GCN_unit(base_channels*2, base_channels*4, A, stride=2, adaptive=adaptive, CoM=CoM)
-        self.l9 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM)
-        self.l10 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM)
+        self.l2 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l3 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l4 = TCN_GCN_unit(base_channels, base_channels, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l5 = TCN_GCN_unit(base_channels, base_channels*2, A, stride=2, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l6 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l7 = TCN_GCN_unit(base_channels*2, base_channels*2, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l8 = TCN_GCN_unit(base_channels*2, base_channels*4, A, stride=2, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l9 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
+        self.l10 = TCN_GCN_unit(base_channels*4, base_channels*4, A, adaptive=adaptive, CoM=CoM,att=att,rsap=rsap,h_edge=h_edge)
 
         self.fc = nn.Linear(base_channels*4, num_class)
 
@@ -448,6 +458,7 @@ class Model(nn.Module):
         x = rearrange(x, 'n (m v c) t -> (n m) c t v', m=M, v=V)
 
         x = self.l1(x)
+        # print("l2")
         x = self.l2(x)
         x = self.l3(x)
         x = self.l4(x)
